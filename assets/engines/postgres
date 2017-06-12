@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Postgres
+# Dumps the specified database or schemas within a database to
+# files then creates a compressed tar containing the files.
+
+PAYLOAD=$1
+DEST_DIR=$2
+TIMESTAMP=$3
+
+export PGHOST=$(jq -r '.source.host' < "$PAYLOAD")
+export PGPORT=$(jq -r '.source.port' < "$PAYLOAD")
+export PGUSER=$(jq -r '.source.user' < "$PAYLOAD")
+export PGPASSWORD=$(jq -r '.source.password' < "$PAYLOAD")
+export PGDATABASE=$(jq -r '.source.database' < "$PAYLOAD")
+
+WORKING_DIR=$(mktemp -d /tmp/pg.XXXXXX)
+PREFIX=$PGDATABASE
+SCHEMAS=$(jq '.params.schemas // empty' < "$PAYLOAD")
+
+DUMP_DIR=$WORKING_DIR/$PREFIX
+mkdir -p "$DUMP_DIR"
+
+if [ -z "$SCHEMAS" ]; then
+  # Whole database
+  FILE=$PREFIX.sql
+  echo "Dump database $PGDATABASE to $FILE"
+  pg_dump --no-password > "$DUMP_DIR/$FILE" || exit 1
+
+else
+  # Individual schemas
+  I=0
+
+  while true; do
+    SCHEMA=$(jq -r ".params.schemas[$I] // empty" < "$PAYLOAD")
+    [ -z "$SCHEMA" ] && break
+    FILE=$PREFIX.$SCHEMA.sql
+
+    echo "Dump schema $SCHEMA to $FILE"
+    pg_dump --no-password --schema="$SCHEMA" > "$DUMP_DIR/$FILE" || exit 1
+
+    ((I++))
+  done
+fi
+
+EMPTY=$(find "$DUMP_DIR" -type f -name '*.sql' -size 0)
+if [ -n "$EMPTY" ]; then
+  echo "Empty backups:"
+  echo "$EMPTY"
+fi
+
+find "$DUMP_DIR" -type f -name '*.sql' -size 0 -delete
+LIST=$(ls -A "$DUMP_DIR")
+
+if [ -z "$LIST" ]; then
+  echo "Dump directory was empty: $DUMP_DIR"
+  exit 1
+fi
+
+ARCHIVE_FILE=$PREFIX.$TIMESTAMP.tar.bz2
+
+echo "Create archive: $ARCHIVE_FILE"
+
+tar -vjcf "$WORKING_DIR/$ARCHIVE_FILE" -C "$DUMP_DIR" . || exit 1
+mv "$WORKING_DIR/$ARCHIVE_FILE" "$DEST_DIR" || exit 1

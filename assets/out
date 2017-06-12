@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -e
+
+exec 3>&1 # make stdout available as fd 3 for the result
+exec 1>&2 # redirect all output to stderr for logging
+
+PAYLOAD=$(mktemp /tmp/resource-out.XXXXXX)
+
+cat > "$PAYLOAD" <&0
+
+# Returns the version passed in or a new version if
+# none was specified.
+
+TIMESTAMP="$(jq -r '.version.timestamp // empty' < "$PAYLOAD")"
+[ -z "$TIMESTAMP" ] && TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+
+jq -n "{
+  version: {
+    timestamp: \"$TIMESTAMP\"
+  }
+}" >&3
